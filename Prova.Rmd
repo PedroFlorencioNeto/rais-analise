@@ -1,0 +1,281 @@
+---
+title: "Análise de Dados da RAIS (2012-2016)"
+output:
+  html_document:
+  
+    css: styles.css
+    df_print: paged
+    toc: true           
+    toc_float: true 
+    number_sections: false
+---
+
+**Autor:** Pedro Florencio de Almeida Neto
+
+**Contato:** *pedroflorencio\@alu.ufc.br*
+
+### 1. Objetivo
+
+O objetivo desta análise é realizar a coleta, processamento e análise de dados da base disponibilizada pela Relação Anual de Informações Sociais (RAIS) para identificar a desigualdade salarial por raça/cor no mercado de trabalho formal brasileiro, como etapa do processo seletivo de auxiliar de pesquisa para o Instituto de Pesquisa Econômica Aplicada (IPEA).
+
+**Perguntas Norteadoras:**
+
+1.  Qual a razão entre os salários de brancos e negros no território nacional?
+
+2.  Como evoluiu a distribuição dos salários médios no Brasil entre no período de 2012 a 2016?
+
+### 2. Introdução
+
+A desigualdade salarial é uma realidade no Brasil. Ao adicionarmos "raça" como variável, os resultados demonstram ainda mais disparidade, evidenciando resquícios do histórico de exploração colonial dos povos negros. Nesse sentido, o presente estudo visa realizar uma análise quantitativa entre os anos de 2012, 2014 e 2016, acerca da desigualdade racial no mercado de trabalho formal brasileiro. Para isso, a coleta, processamento e análise realizada se deu a partir da base de dados da Relação Anual de Informações Sociais (RAIS/MTE) - importante fonte de informações socioeconômicas sobre a população trabalhadora no país desde 1975, quando instituída.
+
+### 3. Metodologia
+
+A metodologia para abordagem deste estudo é a CRISP-DM (Cross Industry Standard Process for Data Mining). A CRISP-DM é amplamente adotada para conduzir projetos de mineração de dados e ciência de dados. Ela estrutura o processo em seis fases principais: compreensão do negócio, compreensão dos dados, preparação dos dados, modelagem, avaliação e implantação. Essa abordagem iterativa e flexível facilita a adaptação a diferentes domínios e necessidades, garantindo que as análises estejam alinhadas com os objetivos estratégicos da organização. Como o objetivo desta análise alcança o nível de complexidade de análise descritiva (Figura 01), as etapas de modelagem, avaliação e implantação não são implementadas.
+
+Figura 01: Tipos de Análise de Dados
+
+![](Screen%20Shot%202025-06-03%20at%2005.23.33.png "Figura 01: Complexidade de Análise"){width="350"}
+
+Fonte: A Era dos Dados para o setor público: uma nova cultura organizacional analítica. Íris Lab Gov, 2021.
+
+#### 3.1. Definição dos Dados Utilizados
+
+Os dados utilizados foram obtidos da Relação Anual de Informações Sociais (RAIS), um relatório de informações socioeconômicas solicitado pela Secretaria de Trabalho do Ministério da Fazenda às pessoas jurídicas e outros empregadores anualmente. Por meio de consulta SQL aplicada ao Data Warehouse no Google BigQuery do site Base dos Dados, três tabelas foram geradas. O Data Warehouse do Base dos Dados é composto por duas tabelas no que tangem aos dados da RAIS:
+
+-   **Microdados Estabelecimentos:** Cada linha representa um estabelecimento em um ano específico. As colunas mostram detalhes sobre a empresa e seus empregados.
+
+-   **Microdados Vínculos:** Cada linha representa um vínculo de trabalho em um ano específico. As colunas mostram informações sobre o vínculo, o empregado e a empresa contratante.
+
+Os materiais de apoio, limitações e inconsistências das tabelas citadas são discutidas nesta [documentação](https://basedosdados.org/dataset/3e7c4d58-96ba-448e-b053-d385a829ef00?tab=userGuide), disponibilizada no site.
+
+#### 3.2. Aquisição de Dados
+
+Para aquisição do dados de forma eficiente e de baixo custo computacional, optou-se pela consulta SQL ao *data warehouse* Google Big Query do site Base dos Dados. O código implementado em R está contido no Quadro 01. Foi removido o ID do projeto do usuário que permite acesso à conta do BigQuery.
+
+Quadro 01: Script de Aquisição dos Dados
+
+``` r
+library(tidyverse)
+library(basedosdados)
+
+set_billing_id("<ID_PROJETO_GBQ>")
+
+# consulta que gera a quantidade vinculos totais e de clt por municipio e ano
+query_estabelecimentos <- "
+  SELECT
+      id_municipio,
+      sigla_uf,
+      ano,
+      SUM(quantidade_vinculos_ativos) AS emprego_total,
+      SUM(quantidade_vinculos_clt) AS emprego_vinculo_clt
+
+  FROM `basedosdados.br_me_rais.microdados_estabelecimentos`
+  WHERE ano IN (2012, 2014, 2016)
+  GROUP BY id_municipio,sigla_uf,ano
+  ORDER BY sigla_uf,id_municipio,ano ASC
+"
+
+# consulta que gera o salario medio por raca/cor, municipio e ano
+query_vinculos <- "
+  SELECT id_municipio,
+         sigla_uf,
+         ano,
+         CASE 
+            WHEN raca_cor IN ('4', '8') THEN 'Negra'
+            WHEN raca_cor = '1' THEN 'Indígena'
+            WHEN raca_cor = '2' THEN 'Branca'
+            WHEN raca_cor = '6' THEN 'Amarela'
+            WHEN raca_cor = '9' THEN 'Não identificado'
+            WHEN raca_cor = '-1' THEN 'Ignorado'
+            ELSE 'Código não encontrado nos dicionários oficiais.'
+          END AS raca_cor_nome,
+        AVG(valor_remuneracao_media) AS salario_medio
+
+  FROM `basedosdados.br_me_rais.microdados_vinculos`
+  WHERE ano in (2012,2014,2016)
+  GROUP BY id_municipio, sigla_uf,ano,raca_cor_nome
+  ORDER BY sigla_uf,id_municipio,ano,raca_cor_nome ASC
+"
+
+query_salario_medio <-
+  "SELECT id_municipio,
+        sigla_uf,
+        ano,
+        AVG(valor_remuneracao_media) AS salario_medio
+  
+  FROM `basedosdados.br_me_rais.microdados_vinculos`
+  WHERE ano in (2012,2014,2016)
+  GROUP BY id_municipio, sigla_uf,ano
+  ORDER BY sigla_uf,id_municipio,ano ASC"
+
+# lendo a tabela de estabelecimentos do site Base de Dados
+df_estabelecimentos <- read_sql(query_estabelecimentos, billing_project_id = get_billing_id())
+
+# salvando df_estabelecimentos em formato csv
+write.csv(df_estabelecimentos,"2012_2016_VinculosPorMunicipio.csv", row.names = FALSE)
+
+# lendo a tabela de vinculos do site Base de Dados
+df_vinculos <- read_sql(query_vinculos, billing_project_id = get_billing_id())
+
+# salvando df_vinculos em formato csv
+write.csv(df_vinculos,"2012_2016_SalarioMedioPorMunicipio.csv", row.names = FALSE)
+
+salario_medio_total <- read_sql(query_salario_medio, 
+                                billing_project_id = get_billing_id())
+
+write.csv(salario_medio_total,"2012_2016_SalarioMedioTotal.csv", row.names = FALSE)
+```
+
+#### 3.3. Entendimento dos Dados
+
+```{r}
+library(dplyr)
+library(tidyverse)
+
+# aquisicao dos dados de vinculos, salario medio total e por raca/cor 
+df_quantidade_vinculos <- read.csv('2012_2016_VinculosPorMunicipio.csv')
+df_salario_medio <- read.csv('2012_2016_SalarioMedioPorMunicipio.csv')
+df_salario_medio_total <- read.csv("2012_2016_SalarioMedioTotal.csv")
+```
+
+```{r}
+head(df_quantidade_vinculos)
+```
+
+```{r}
+head(df_salario_medio)
+```
+
+```{r}
+head(df_salario_medio_total)
+```
+
+Neste passo, atentou-se para a correta realização do cálculo de média salarial geral e posteriormente por recorte de raça/cor. No primeiro caso, foi realizado o cálculo antes da agregação por raça/cor e o salvamento desta coluna em formato CSV. Como próximo passo, deseja-se realizar todo o processamento para geração da tabela pedida em linguagem SQL, acelerando o pré-processamento dos dados. As tabelas foram salvas em CSV e disponibilizada no corpo do email para evitar custos de processamento no Google BigQuery.
+
+#### 3.4. Pré-Processamento dos Dados
+
+```{r}
+library(dplyr)
+library(tidyverse)
+
+# aquisicao dos dados de vinculos, salario medio total e por raca/cor 
+df_quantidade_vinculos <- read.csv('2012_2016_VinculosPorMunicipio.csv')
+df_salario_medio <- read.csv('2012_2016_SalarioMedioPorMunicipio.csv')
+df_salario_medio_total <- read.csv("2012_2016_SalarioMedioTotal.csv")
+
+# pivotando a coluna categorica de raca_cor
+df_salario_medio <- df_salario_medio %>% 
+  pivot_wider(names_from = raca_cor_nome, values_from = salario_medio)
+
+# juntando os dataframes
+df_join <- left_join(df_quantidade_vinculos, 
+                     df_salario_medio, 
+                     by = c("id_municipio", "ano","sigla_uf"))
+df_join <- df_join %>% mutate(id_municipio = as.character(id_municipio))
+
+# adicionando coluna de salario medio sem agregacao por raca/cor
+df_salario_medio_total <- df_salario_medio_total %>% 
+                            mutate(id_municipio = as.character(id_municipio))
+
+df_completo <- left_join(df_join, 
+                         df_salario_medio_total, 
+                         by = c("id_municipio", "ano","sigla_uf"))
+
+# adicionando razao entre salario medio de pessoas brancas e negras
+df_completo <- df_completo %>% mutate(razao_salario_medio = Branca / Negra)
+
+# selecao das variaveis necessarias
+df <- df_completo %>% select('id_municipio',
+                             'sigla_uf',
+                             'ano',
+                             'emprego_total',
+                             'emprego_vinculo_clt',
+                             'salario_medio',
+                             'salario_medio_brancos'='Branca',
+                             'salario_medio_negros'='Negra',
+                             'razao_salario_medio')
+
+# arredondando os valores numericos
+df <- df %>%
+  mutate(salario_medio = round(salario_medio, 2),
+         salario_medio_brancos = round(salario_medio_brancos, 2),
+         salario_medio_negros = round(salario_medio_negros, 2),
+         razao_salario_medio = round(razao_salario_medio, 2))
+
+# salvando a tabela em formato CSV 
+write.csv(df,"2012_2016_DisparidadeSalarial.csv", row.names = FALSE)
+```
+
+A etapa de pré-processamento de dados teve como objetivo a realização de junções nas tabelas geradas no BigQuery e cálculo da variável que relaciona o salário médio entre pessoas brancas e negras. Foi necessário o uso do método *pivot_wider()* para transformar em variáveis a coluna que continha a raça/cor dos vínculos formais de emprego.
+
+#### 3.5. Análise Exploratória de Dados (E.D.A.)
+
+Como parte da análise exploratória de dados deste estudo, buscou-se responder a primeira pergunta norteadora. Para uma visualização nítida da distribuição da razão, optou-se pela remoção dos outliers considerando o método do corte por amplitude interquartil, aplicando o produto da amplitude interquartil pelo valor 1,5. A discussão do resultado é apresentada no tópico 4.
+
+##### 3.5.1. Qual a razão entre os salários de brancos e negros no território nacional?
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(echarts4r)
+
+df <- read.csv("2012_2016_DisparidadeSalarial.csv")
+
+# remocao dos outliers para melhor visualização do histograma
+Q1 <- quantile(df$razao_salario_medio, 0.25, na.rm = TRUE)
+Q3 <- quantile(df$razao_salario_medio, 0.75, na.rm = TRUE)
+IQR <- Q3 - Q1
+# limiares
+limite_inferior <- Q1 - 1.5 * IQR
+limite_superior <- Q3 + 1.5 * IQR
+# identificacao de outliers
+outliers <- df %>%
+  filter(razao_salario_medio < limite_inferior | razao_salario_medio > limite_superior)
+# remocao dos outliers
+dados_filtrados <- df %>%
+  filter(razao_salario_medio >= limite_inferior & razao_salario_medio <= limite_superior)
+
+# producao do histograma da razao salarial
+dados_filtrados %>%
+  filter(is.finite(razao_salario_medio) & !is.na(razao_salario_medio) & razao_salario_medio >= 0) %>%
+  e_charts() %>%
+  e_histogram(razao_salario_medio, name = "Quantidade", breaks = 30) %>%
+  e_title("Distribuição da Razão Salarial entre Pessoas Brancas e Negras",
+          textStyle = list(fontSize = 12)) %>%
+  e_x_axis(name = "Razão", 
+           min=0.5,
+           max=1.590,
+           interval=.05, 
+           axisLabel = list(rotate = 45)) %>%
+  e_y_axis(name = "Frequência") %>%
+  e_theme("walden") %>%
+  e_legend(show = FALSE) %>%
+  e_tooltip(trigger = "axis")
+```
+
+```{r}
+df <- df %>% filter(is.finite(razao_salario_medio))
+summary(df$razao_salario_medio)
+```
+
+### 4. Resultados
+
+Como evidenciado pelos dados, a disparidade salarial entre pessoas brancas e negras é uma realidade persistente no Brasil. Aproximadamente 50% das observações da razão salarial média indicam que pessoas brancas recebem pelo menos 13% a mais do que pessoas negras — ou seja, para cada R\$1.000,00 recebidos por uma pessoa negra, uma pessoa branca recebe R\$1.130,00. Além disso, observa-se que essa desigualdade pode ser ainda mais extrema, com a razão salarial chegando, em casos máximos, a 13 vezes o valor recebido por uma pessoa negra. Por fim, deve-se considerar que a análise foi observada entre os anos de 2012, 2014 e 2016, com base nos vínculos **formais** de emprego.
+
+### 5. Conclusão
+
+O estudo concentrou-se em avaliar a razão entre o salário médio de pessoas brancas e o de pessoas negras nos municípios brasileiros nos anos de 2012, 2014 e 2016. A análise da distribuição dessa razão, por meio de um histograma, evidenciou a existência de desigualdades salariais significativas, que devem ser enfrentadas tanto pelos gestores públicos quanto pela sociedade em geral.
+
+Como próximos passos, recomenda-se obter o histórico da razão salarial nos municípios ao longo do tempo, bem como realizar um recorte por estado. Isso permitirá identificar se a desigualdade está se acentuando ou diminuindo, além de destacar quais estados e municípios apresentam as maiores disparidades — e, por outro lado, quais oferecem bons exemplos para a formulação de políticas públicas. Para isso, a construção de um mapa coroplético pode ser uma ferramenta útil para visualizar e comparar regiões. Além disso, a análise de séries temporais por estado pode oferecer indicativos importantes para a comparação e definição de prioridades entre os entes federativos.
+
+Adicionalmente, observar dados qualitativos sobre onde se concentram as maiores demissões, os motivos dessas demissões (presentes na tabela de vínculos da RAIS) e a quantidade de admitidos por raça e cor pode revelar indícios de uma possível bolha de racismo estrutural no mercado de trabalho brasileiro — especialmente se padrões de exclusão sistemática forem identificados. Essas informações aprofundam o diagnóstico das desigualdades e fortalecem o embasamento para ações públicas mais eficazes.
+
+### 6. Referências Bibliográficas
+
+MONTGOMERY, Douglas C.; RUNGER, George C. *Estatística aplicada e probabilidade para engenheiros*. 6. ed. Rio de Janeiro: LTC, 2016.
+
+WILHER, Vitor. *Utilizando o pacote basedosdados no R*. Análise Macro, 20 maio 2021. Disponível em: <https://analisemacro.com.br/data-science/utilizando-o-pacote-basedosdados-no-r/>. Acesso em: 2 jun. 2025.
+
+WICKHAM, Hadley; GROLEMUND, Garrett. *R para data science: importação, transformação, visualização e modelagem de dados*. São Paulo: Novatec, 2018.
+
+Governo do Estado do Ceará. *A Era dos Dados para o Setor Público*. Fortaleza, 2021. Disponível em: <https://irislab.ce.gov.br/wp-content/uploads/2021/09/LIVRO-DIGITAL-A-Era-dos-Dados-para-o-Setor-P%C3%BAblico.pdf>. Acesso em: 3 jun. 2025.
